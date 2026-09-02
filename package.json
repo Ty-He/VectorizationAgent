@@ -1,0 +1,17 @@
+{
+  "name": "vectorizer-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "智能体驱动的自动向量化优化系统 (TSVC 10 kernels)",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "smoke": "node scripts/smoke.js",
+    "vectorizer": "node src/cli.js"
+  },
+  "dependencies": {
+    "openai": "^4.68.0",
+    "yaml": "^2.6.0"
+  }
+}

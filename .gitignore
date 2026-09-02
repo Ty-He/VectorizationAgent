@@ -1,0 +1,18 @@
+# secrets
+.env
+
+# compiled artifacts
+*.exe
+*.opt.yaml
+*.obj
+*.o
+
+# agent runtime state
+experiments/
+memory/
+
+# node
+node_modules/
+
+# logs
+*.log
