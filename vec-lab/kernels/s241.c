@@ -28,13 +28,10 @@ int s241_opt(void)
 {
   for (int nl = 0; nl < 2 * NTIMES; nl++) {
     for (int i = 0; i < LEN - 1; i++) {
-      double bi = b[i];
-      double ci = c[i];
-      double di = d[i];
-      double ai = bi * ci * di;
-      double an = a[i + 1];
-      a[i] = ai;
-      b[i] = ai * an * di;
+      double old_a_i = a[i];
+      double old_a_ip1 = a[i + 1];
+      a[i] = b[i] * c[i] * d[i];
+      b[i] = old_a_i * old_a_ip1 * d[i];
     }
     dummy(a, b, c, d, e, aa, bb, cc, 0.);
   }

@@ -1,5 +1,6 @@
 "use strict";
 // Persist per-kernel run state (resume / audit) and export final results (json + csv).
+const fs = require("fs");
 const fsUtil = require("../utils/fs");
 const path = require("path");
 const workspace = require("./workspace");
@@ -53,7 +54,8 @@ function exportResult(state) {
   const noHeader = fsUtil.exists(csvFile);
   const line = CSV_COLS.map((c) => quote(String(row[c] ?? ""))).join(",");
   fsUtil.ensureDir(path.dirname(csvFile));
-  fsUtil.writeText(csvFile, (noHeader ? "" : CSV_COLS.map(quote).join(",") + "\n") + line + "\n");
+  if (!noHeader) fs.appendFileSync(csvFile, CSV_COLS.map(quote).join(",") + "\n", "utf8");
+  fs.appendFileSync(csvFile, line + "\n", "utf8");
   return f;
 }
 

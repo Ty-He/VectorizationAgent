@@ -20,3 +20,37 @@ int s482_orig(void)
   }
   return 0;
 }
+
+
+/* ====BEGIN_OPT_AUTOGEN (vectorizer agent)==== */
+#include <immintrin.h>
+
+int s482_opt(void)
+{
+  for (int nl = 0; nl < NTIMES; nl++) {
+    int k = LEN;
+    for (int i = 0; i < LEN; i += 4) {
+      __m256d cb = _mm256_loadu_pd(&c[i]);
+      __m256d bb = _mm256_loadu_pd(&b[i]);
+      __m256d mask = _mm256_cmp_pd(cb, bb, _CMP_GT_OQ);
+      int m = _mm256_movemask_pd(mask);
+      if (m) {
+        int idx = __builtin_ctz(m);
+        k = i + idx;
+        break;
+      }
+    }
+    if (k == LEN) {
+      for (int i = 0; i < LEN; i++) {
+        a[i] += b[i] * c[i];
+      }
+    } else {
+      for (int i = 0; i <= k; i++) {
+        a[i] += b[i] * c[i];
+      }
+    }
+    dummy(a, b, c, d, e, aa, bb, cc, 0.);
+  }
+  return 0;
+}
+/* ====END_OPT_AUTOGEN==== */

@@ -31,14 +31,16 @@ L10:
 int s1161_opt(void)
 {
   for (int nl = 0; nl < NTIMES; nl++) {
+    #pragma clang loop vectorize(enable)
     for (int i = 0; i < LEN - 1; ++i) {
-      TYPE ai = a[i];
-      TYPE ci = c[i];
-      TYPE di = d[i];
-      if (ci < (TYPE)0.) {
-        b[i] = ai + di * di;
-      } else {
-        a[i] = ci + di * e[i];
+      if (c[i] < (TYPE)0.) {
+        b[i] = a[i] + d[i] * d[i];
+      }
+    }
+    #pragma clang loop vectorize(enable)
+    for (int i = 0; i < LEN - 1; ++i) {
+      if (!(c[i] < (TYPE)0.)) {
+        a[i] = c[i] + d[i] * e[i];
       }
     }
     dummy(a, b, c, d, e, aa, bb, cc, 0.);

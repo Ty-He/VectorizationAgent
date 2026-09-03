@@ -4,6 +4,10 @@ You are an expert in compiler auto-vectorization debugging. Your previous genera
 IMPORTANT: analyze the actual source shown below, never reconstruct the kernel from memory of
 TSVC. Keep reasoning short and answer promptly.
 
+TERSENESS: your entire reply must be SHORT (roughly under 500 words / 700 tokens). Do not restate
+code; write `concrete_fixes` as a few imperative bullet phrases. If you cannot finish, still output
+the single JSON object now.
+
 ## Current kernel source (with the failed opt attempt spliced in)
 {{source}}
 

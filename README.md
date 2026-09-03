@@ -4,6 +4,19 @@
 正确性验证与性能对比等任务。以 TSVC 基准集为对象，选取 10 个无法被编译器自动向量化的函数
 （见 [vec-lab](vec-lab/README.md)）进行自动优化探索，校验正确性并对比性能，沉淀可复用经验。
 
+> 当前结果：7/10 内核在无人值守跑中达到 ≥1.15x（最高 vdotr 7.38x、s453 5.47x）；
+> s1161/s341 可向量化但性能无收益（no-gain 留存）；s421 确有收益（~1.45x 已有实现）
+> 但自动化复现不稳定。方法学与逐内核说明见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
+
+## 文档导航
+
+| 文档 | 内容 |
+|------|------|
+| [docs/AGENT_SYSTEM.md](docs/AGENT_SYSTEM.md) | 模块功能、单次任务的执行流程、命令速查 |
+| [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | 10 内核实验结果汇总、方法学、no-gain 专项说明 |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | 项目现状总结与"候选多样性"开发规划 |
+| [vec-lab/](vec-lab/README.md) | C 实验场说明 |
+
 ## 组织
 
 ```
@@ -56,6 +69,6 @@ node src/cli.js all         # 依次优化全部内核
 ## 提交物
 
 - [x] 完整源代码
-- [ ] 10 个函数的向量化前后性能对比数据 (experiments/results.csv)
+- [x] 10 个函数的向量化前后性能对比数据（`experiments/results.csv`，方法学见 docs/EXPERIMENTS.md）
 - [ ] 项目展示 PPT
 - [ ] 设计报告（含系统架构、实验分析）

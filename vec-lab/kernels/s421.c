@@ -20,3 +20,26 @@ int s421_orig(void)
   }
   return 0;
 }
+
+
+/* ====BEGIN_OPT_AUTOGEN (vectorizer agent)==== */
+int s421_opt(void)
+{
+  static TYPE temp[LEN];
+  for (int nl = 0; nl < 4 * NTIMES; nl++) {
+    yy = xx;
+    TYPE * __restrict xp = xx;
+    TYPE * __restrict ap = a;
+    TYPE * __restrict tp = temp;
+    for (int i = 0; i < LEN - 1; i++) {
+      tp[i] = xp[i + 1];
+    }
+    #pragma clang loop vectorize(enable)
+    for (int i = 0; i < LEN - 1; i++) {
+      xp[i] = tp[i] + ap[i];
+    }
+    dummy(a, b, c, d, e, aa, bb, cc, 1.);
+  }
+  return 0;
+}
+/* ====END_OPT_AUTOGEN==== */

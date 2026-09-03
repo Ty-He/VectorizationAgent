@@ -30,14 +30,34 @@ const SYSTEM = {
     "You are an expert at debugging failed vectorization attempts. Answer with VALID JSON only, no prose.",
 };
 
+// code-generation route -> template file (without .md)
+const GENERATE_TEMPLATES = {
+  rewrite: "generate",
+  pragma: "generate_pragma",
+  intrinsic: "generate_intrinsic",
+};
+
+function generateTemplateName(route) {
+  return GENERATE_TEMPLATES[route] || "generate";
+}
+
 function buildAnalyze(vars) {
   return { system: SYSTEM.analyze, user: fill(template("analyze"), vars) };
 }
 function buildGenerate(vars) {
-  return { system: SYSTEM.generate, user: fill(template("generate"), vars) };
+  const tpl = generateTemplateName(vars.route || "rewrite");
+  return { system: SYSTEM.generate, user: fill(template(tpl), vars) };
 }
 function buildReflect(vars) {
   return { system: SYSTEM.reflect, user: fill(template("reflect"), vars) };
 }
 
-module.exports = { buildAnalyze, buildGenerate, buildReflect, fill, template };
+module.exports = {
+  buildAnalyze,
+  buildGenerate,
+  buildReflect,
+  fill,
+  template,
+  generateTemplateName,
+  GENERATE_TEMPLATES,
+};

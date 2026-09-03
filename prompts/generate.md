@@ -13,6 +13,12 @@ correct reference you must reproduce numerically.
 IMPORTANT ground truth: everything you need is in the source shown above. Do NOT guess or
 reconstruct this kernel from memory of TSVC. Base your rewrite only on the given code.
 
+## Compiler remarks on the ORIG loop (baseline, from clang)
+{{remarks}}
+
+These are the clang loop-vectorize remarks that motivated this optimization. If a remark contains an
+explicit suggestion (e.g. "Use #pragma clang loop distribute(enable) ..."), take it seriously.
+
 ## Previous attempts & feedback (empty on first try)
 {{feedback}}
 

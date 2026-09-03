@@ -1,6 +1,7 @@
 "use strict";
 // Vectorization agent driver: fixed-stage pipeline orchestrating LLM + deterministic tools.
 const crypto = require("crypto");
+const path = require("path");
 const config = require("../config");
 const logger = require("../utils/logger");
 const fsUtil = require("../utils/fs");
@@ -26,14 +27,15 @@ function origFn(kernel) {
 /**
  * @param {function} build - build prompt for llm
  * @param {function} check - check the json responsed by llm
+ * @param {object} [chatOpts] - extra options passed to llmClient.chat (budget/escalate/attempts)
  * request llm for analysis
  */
-async function callJson(build, check) {
+async function callJson(build, check, chatOpts = {}) {
   let lastErr = null;
   for (let i = 0; i < 3; i++) {
     try {
       const p = build();
-      const { content } = await llmClient.chat({ system: p.system, user: p.user, jsonMode: true });
+      const { content } = await llmClient.chat({ system: p.system, user: p.user, jsonMode: true, ...chatOpts });
       const obj = schemas.extractJson(content);
       if (check) check(obj);
       return obj;
@@ -69,6 +71,46 @@ async function generateCode(kernel, vars, temperature) {
 
 function hashText(text) {
   return crypto.createHash("sha1").update(text).digest("hex");
+}
+
+// Normalize the analyze output's recommended_routes into the allowed route set.
+// 'hybrid' is generated through the intrinsic-style template in this implementation.
+function normalizeRoutes(list) {
+  const out = [];
+  const seen = new Set();
+  if (Array.isArray(list)) {
+    for (const r of list) {
+      const key = r === "hybrid" ? "intrinsic" : r;
+      if (config.ROUTES.includes(key) && !seen.has(key)) {
+        seen.add(key);
+        out.push(key);
+      }
+    }
+  }
+  if (!out.length) out.push("rewrite");
+  return out;
+}
+
+// Build a deterministic route schedule across MAX_TRIES attempts. The FIRST route (the
+// recommended/preferred one, usually "rewrite") is tried first and keeps ALL attempts not spent
+// on fallbacks; each subsequent (fallback) route gets at most ROUTE_SWITCH_TRIES attempts.
+// Example: tries=6, routes=[rewrite,pragma,intrinsic], switchTries=1 -> rewrite,rewrite,rewrite,
+// rewrite,pragma,intrinsic. This avoids starving the route that empirically wins most kernels.
+function buildRouteSchedule(routes, maxTries, fallbackTries) {
+  const fb = Math.max(1, fallbackTries);
+  const counts = new Array(routes.length).fill(0);
+  let remaining = maxTries;
+  for (let i = 1; i < routes.length && remaining > 0; i++) {
+    const give = Math.min(fb, remaining);
+    counts[i] = give;
+    remaining -= give;
+  }
+  counts[0] += remaining; // remainder goes to the preferred (first) route
+  const schedule = [];
+  for (let i = 0; i < routes.length; i++) {
+    for (let k = 0; k < counts[i]; k++) schedule.push(routes[i]);
+  }
+  return schedule;
 }
 
 // Reflect on a failed attempt, then return the note string to append to feedback history.
@@ -163,19 +205,33 @@ async function optimize(kernel, opts = {}) {
     state.analysis = analysis;
     logger.info(`strategy: ${analysis.strategy}  (vectorizable=${analysis.vectorizable})`);
 
+    // candidate-diversity route schedule (default: rewrite all the way if model says nothing)
+    const routes = normalizeRoutes(config.FORCE_ROUTES.length ? config.FORCE_ROUTES : analysis.recommended_routes);
+    const routeSchedule = buildRouteSchedule(routes, config.MAX_TRIES, config.ROUTE_SWITCH_TRIES);
+    state.routes = {
+      recommended: analysis.recommended_routes || [],
+      normalized: routes,
+      schedule: routeSchedule,
+    };
+    logger.info(`routes: ${routes.join(" -> ")}  schedule=${routeSchedule.join(",")}`);
+
     /* ---------------- attempt loop ---------------- */
     let feedbackHistory = [];
     let lastCode = "";
     const attemptHashes = [];
+    let bestNoGain = null; // best correct+vectorized candidate below THRESHOLD (RETAIN_NOGAIN mode)
 
     for (let n = 1; n <= config.MAX_TRIES; n++) {
-      logger.step(`[${kernel}] attempt ${n}/${config.MAX_TRIES}`);
+      const route = routeSchedule[n - 1];
+      logger.step(`[${kernel}] attempt ${n}/${config.MAX_TRIES} (route: ${route})`);
       const related = experienceStore.findRelated(kernel, analysis);
       const baseFeedback = feedbackHistory.length ? feedbackHistory.join("\n\n") : "(none - first try)";
       const genVars = {
         kernel,
         kernel_upper: compiler.upper(kernel),
+        route,
         source: sourceText,
+        remarks: (state.baseline && state.baseline.remarkSummary) || "(no loop-vectorize remarks)",
         analysis: JSON.stringify(analysis, null, 2),
         feedback: baseFeedback,
         last_attempt: lastCode ? `\`\`\`c\n${lastCode}\n\`\`\`` : "(none - write from scratch)",
@@ -214,11 +270,24 @@ async function optimize(kernel, opts = {}) {
       lastCode = code;
       attemptHashes.push(codeHash);
       fsUtil.writeText(workspace.file(kernel, workspace.names.attemptCode(n)), code);
+      // keep per-route candidate copies for audit / later comparison
+      const candDir = path.join(workspace.dir(kernel), "candidates");
+      fsUtil.ensureDir(candDir);
+      const candName = `${route}_${n}.c`;
+      fsUtil.writeText(path.join(candDir, candName), code);
 
       // splice into kernel file
       sourceTool.setOpt(kernel, code);
 
-      const attempt = { n, codeFile: workspace.names.attemptCode(n), codeHash, gates: [], feedback: "" };
+      const attempt = {
+        n,
+        route,
+        codeFile: workspace.names.attemptCode(n),
+        candidateFile: candName,
+        codeHash,
+        gates: [],
+        feedback: "",
+      };
       state.attempts.push(attempt);
       state.updatedAt = new Date().toISOString();
       resultStore.saveState(state);
@@ -303,15 +372,12 @@ async function optimize(kernel, opts = {}) {
       );
 
       const speedOk = bench.speedupBest >= config.THRESHOLD;
-      // "no-gain": correct + vectorized but below threshold. Only accepted when RETAIN_NOGAIN is on
-      // (used to keep kernels like s211/s1161 whose vectorized version is ~1x but still correct).
-      const noGain = config.RETAIN_NOGAIN && !speedOk;
-      if (verdict.ok || noGain) {
-        /* ---------------- success ---------------- */
-        state.status = noGain ? "ok-nogain" : "ok";
+      if (speedOk) {
+        /* ---------------- success (meets speed target) ---------------- */
+        state.status = "ok";
         state.final = {
           attempt: n,
-          noGain: noGain || undefined,
+          routeUsed: attempt.route,
           metrics: {
             ...verdict.metrics,
             origMin: bench.origMin,
@@ -325,30 +391,33 @@ async function optimize(kernel, opts = {}) {
         resultStore.exportResult(state);
         experienceStore.addExperience({
           kernel,
-          kind: noGain ? "no-gain" : "success",
+          kind: "success",
           category: analysis.category,
           obstacle_kind: analysis.obstacle_kind,
           obstacle: analysis.obstacle,
           strategy: analysis.strategy,
           transform_plan: analysis.transform_plan,
-          pitfalls: noGain
-            ? `correct+vectorized but speedup ${bench.speedupBest.toFixed(3)} < threshold ${config.THRESHOLD}; retained as no-gain. ${analysis.risk_notes || ""}`
-            : analysis.risk_notes || "",
-          result: {
-            ok: true,
-            noGain: noGain || false,
-            speedupBest: bench.speedupBest,
-            speedupMedian: bench.speedupMedian,
-            vf: vecInfo.width,
-          },
+          pitfalls: analysis.risk_notes || "",
+          result: { ok: true, speedupBest: bench.speedupBest, speedupMedian: bench.speedupMedian, vf: vecInfo.width },
           codeFile: workspace.file(kernel, workspace.names.attemptCode(n)),
         });
-        logger.success(
-          noGain
-            ? `[${kernel}] RETAINED(NO-GAIN): correct + vectorized(vf=${vecInfo.width}) but speedup ${bench.speedupBest.toFixed(3)}x < ${config.THRESHOLD}`
-            : `[${kernel}] OPTIMIZED: correct + vectorized(vf=${vecInfo.width}) + speedup ${bench.speedupBest.toFixed(3)}x`
-        );
+        logger.success(`[${kernel}] OPTIMIZED: correct + vectorized(vf=${vecInfo.width}) + speedup ${bench.speedupBest.toFixed(3)}x`);
         return state;
+      }
+
+      // Below threshold. In no-gain mode keep exploring the remaining routes and remember the best
+      // correct+vectorized candidate (finalize at budget end); otherwise it is a plain "too slow".
+      if (config.RETAIN_NOGAIN) {
+        if (!bestNoGain || bench.speedupBest > bestNoGain.bench.speedupBest) {
+          bestNoGain = { attempt, bench, vf: vecInfo.width, runJson: jRes };
+        }
+        attempt.outcome = "too-slow";
+        attempt.noGainCandidate = true;
+        logger.warn(
+          `no-gain candidate: correct + vectorized(vf=${vecInfo.width}) but speedup ` +
+            `${bench.speedupBest.toFixed(3)}x < ${config.THRESHOLD}; keep trying remaining routes`
+        );
+        continue;
       }
 
       /* too slow */
@@ -360,7 +429,58 @@ async function optimize(kernel, opts = {}) {
       logger.warn(`too slow (need >= ${config.THRESHOLD})`);
     }
 
-    /* ---------------- exhausted budget ---------------- */
+    /* ---------------- budget exhausted ---------------- */
+    if (config.RETAIN_NOGAIN && bestNoGain) {
+      // Splice the best correct+vectorized (no-gain) candidate back in and retain it as ok-nogain.
+      const bg = bestNoGain;
+      const bgCode = fsUtil.readText(workspace.file(kernel, bg.attempt.codeFile));
+      sourceTool.setOpt(kernel, bgCode);
+      state.status = "ok-nogain";
+      state.final = {
+        attempt: bg.attempt.n,
+        routeUsed: bg.attempt.route,
+        noGain: true,
+        metrics: {
+          speedupBest: bg.bench.speedupBest,
+          speedupMedian: bg.bench.speedupMedian,
+          vf: bg.vf,
+          mismatches: bg.runJson ? bg.runJson.mismatches : null,
+          origMin: bg.bench.origMin,
+          optMin: bg.bench.optMin,
+        },
+        checksum: bg.runJson ? bg.runJson.checksum : null,
+        checksumOrig: bg.runJson ? bg.runJson.checksum_orig : null,
+      };
+      state.updatedAt = new Date().toISOString();
+      resultStore.saveState(state);
+      resultStore.exportResult(state);
+      experienceStore.addExperience({
+        kernel,
+        kind: "no-gain",
+        category: analysis.category,
+        obstacle_kind: analysis.obstacle_kind,
+        obstacle: analysis.obstacle,
+        strategy: analysis.strategy,
+        transform_plan: analysis.transform_plan,
+        pitfalls:
+          `best correct+vectorized attempt ${bg.attempt.n} (route ${bg.attempt.route}) only reached ` +
+          `speedup ${bg.bench.speedupBest.toFixed(3)} (< ${config.THRESHOLD}); retained as no-gain. ${analysis.risk_notes || ""}`,
+        result: {
+          ok: true,
+          noGain: true,
+          speedupBest: bg.bench.speedupBest,
+          speedupMedian: bg.bench.speedupMedian,
+          vf: bg.vf,
+        },
+        codeFile: workspace.file(kernel, bg.attempt.codeFile),
+      });
+      logger.success(
+        `[${kernel}] RETAINED(NO-GAIN): best correct+vectorized(vf=${bg.vf}) at speedup ` +
+          `${bg.bench.speedupBest.toFixed(3)}x (route ${bg.attempt.route})`
+      );
+      return state;
+    }
+
     logger.step(`[${kernel}] budget exhausted, restoring pristine kernel source`);
     sourceTool.writeKernel(kernel, pristine); // do not ship a sub-par opt in kernels/
     const best = state.attempts.find((a) => a.verdict && a.verdict.reasons.length === 1) || state.attempts[state.attempts.length - 1] || null;
@@ -407,6 +527,8 @@ async function optimize(kernel, opts = {}) {
 }
 
 // Reflect on a failed attempt -> returns a compact structured "fix" note string (or null).
+// Advisory only: give it a small fixed budget and fail fast rather than burning tokens when the
+// model over-produces. Failure degrades to an explicit "UNAVAILABLE" note (see reflectNote).
 async function runReflect(kernel, analysis, currentSource, feedback, n) {
   try {
     const obj = await callJson(
@@ -418,12 +540,13 @@ async function runReflect(kernel, analysis, currentSource, feedback, n) {
           analysis: JSON.stringify(analysis, null, 2),
           feedback,
         }),
-      (o) => schemas.required(o, ["root_cause", "next_action", "concrete_fixes"], "reflect")
+      (o) => schemas.required(o, ["root_cause", "next_action", "concrete_fixes"], "reflect"),
+      { maxTokens: 1600, maxAttempts: 1, escalate: false }
     );
     const fixes = Array.isArray(obj.concrete_fixes) ? obj.concrete_fixes.join(" | ") : String(obj.concrete_fixes || "");
     return `root_cause=${obj.root_cause}\nnext_action=${obj.next_action}\nfixes: ${fixes}`;
   } catch (e) {
-    logger.warn(`reflect LLM failed: ${e.message}`);
+    logger.warn(`reflect LLM failed (bounded): ${e.message}`);
     return null;
   }
 }

@@ -96,4 +96,30 @@ function vectorizeInfo(records, functionName) {
   };
 }
 
-module.exports = { parseRecordFile, filterRecords, summarize, vectorizeInfo };
+// Heuristic evidence that SIMD instructions are actually emitted, read from asm-printer
+// InstructionMix records. Useful for the intrinsic route, where there may be no
+// loop-vectorize "Passed" record but the codegen still contains vector instructions.
+const SIMD_TOKEN_RE = /\b[A-Z][A-Z0-9_]*(?:PD|PS|DQ|YMM|XMM|FMA|APD|APS)\b/i;
+function simdEvidence(records, functionName) {
+  const mine = records.filter(
+    (r) => r.pass === "asm-printer" && r.name === "InstructionMix" && (!functionName || r.function === functionName)
+  );
+  const text = mine.map((r) => r.text).join("\n");
+  const tokens = text.match(/\b[A-Z][A-Z0-9_]*\b/g) || [];
+  const hits = [];
+  const seen = new Set();
+  for (const t of tokens) {
+    if (SIMD_TOKEN_RE.test(t) && !seen.has(t)) {
+      seen.add(t);
+      hits.push(t);
+    }
+  }
+  return {
+    // approximate: total count of vector-ish tokens appearing in the instruction mix
+    simd: hits.length > 0,
+    names: hits.slice(0, 20),
+    count: hits.length,
+  };
+}
+
+module.exports = { parseRecordFile, filterRecords, summarize, vectorizeInfo, simdEvidence };

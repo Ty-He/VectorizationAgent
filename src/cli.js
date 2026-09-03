@@ -18,6 +18,7 @@ options:
   --threshold <x>     required speedup (default ${config.THRESHOLD})
   --bench <n>         benchmark trials per kernel (default ${config.BENCH_TRIALS})
   --retain-nogain     accept correct+vectorized even if speedup < threshold, mark no-gain
+  --routes <a,b,c>    force route order (rewrite,pragma,intrinsic); default: from analyze
   --no-reflect        skip the LLM reflection step on failed attempts
   --quiet             less progress output
 `);
@@ -40,6 +41,7 @@ function applyOverrides(args) {
     else if (a === "--threshold") config.THRESHOLD = parseFloat(take(i)) || config.THRESHOLD;
     else if (a === "--bench") config.BENCH_TRIALS = parseInt(take(i), 10) || config.BENCH_TRIALS;
     else if (a === "--retain-nogain") config.RETAIN_NOGAIN = true;
+    else if (a === "--routes") config.FORCE_ROUTES = take(i).split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
   }
 }
 

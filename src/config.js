@@ -27,6 +27,17 @@ module.exports = {
   BENCH_TRIALS: parseInt(process.env.VECTORIZER_BENCH_TRIALS || "7", 10),
   // accept correct+vectorized even when speedup is below THRESHOLD, label it no-gain
   RETAIN_NOGAIN: process.env.VECTORIZER_RETAIN_NOGAIN === "1",
+  // candidate-diversity route budget: each NON-first fallback route gets this many attempts
+  // (default 1); the FIRST (preferred, usually rewrite) route receives all remaining attempts.
+  // e.g. tries=6, routes=[rewrite,pragma,intrinsic] -> 4 rewrite + 1 pragma + 1 intrinsic.
+  ROUTE_SWITCH_TRIES: parseInt(process.env.VECTORIZER_ROUTE_SWITCH_TRIES || "1", 10),
+  // allowed code-generation routes (hybrid is handled as intrinsic-style generation here)
+  ROUTES: ["rewrite", "pragma", "intrinsic"],
+  // optional explicit route order override (e.g. "pragma,intrinsic"); empty = follow analyze
+  FORCE_ROUTES: (process.env.VECTORIZER_FORCE_ROUTES || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
 
   // llm
   LLM_BASE_URL: process.env.LLM_BASE_URL || "https://api.deepseek.com",

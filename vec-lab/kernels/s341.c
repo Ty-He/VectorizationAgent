@@ -23,3 +23,31 @@ int s341_orig(void)
   }
   return 0;
 }
+
+
+/* ====BEGIN_OPT_AUTOGEN (vectorizer agent)==== */
+#include <immintrin.h>
+int s341_opt(void)
+{
+  static int idx[LEN];
+  for (int nl = 0; nl < NTIMES; nl++) {
+    int count = 0;
+    for (int i = 0; i < LEN; i++) {
+      if (b[i] > (TYPE)0.) {
+        idx[count++] = i;
+      }
+    }
+    int j = 0;
+    for (; j + 4 <= count; j += 4) {
+      __m128i idxv = _mm_loadu_si128((const __m128i*)&idx[j]);
+      __m256d bv = _mm256_set_pd(b[idx[j+3]], b[idx[j+2]], b[idx[j+1]], b[idx[j]]);
+      _mm256_storeu_pd(&a[j], bv);
+    }
+    for (; j < count; j++) {
+      a[j] = b[idx[j]];
+    }
+    dummy(a, b, c, d, e, aa, bb, cc, 0.);
+  }
+  return 0;
+}
+/* ====END_OPT_AUTOGEN==== */

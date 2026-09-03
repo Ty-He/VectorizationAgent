@@ -21,3 +21,22 @@ int s211_orig(void)
   }
   return 0;
 }
+
+
+/* ====BEGIN_OPT_AUTOGEN (vectorizer agent)==== */
+int s211_opt(void)
+{
+  for (int nl = 0; nl < NTIMES; nl++) {
+    double prev_b = b[0];
+    for (int i = 1; i < LEN - 1; i++) {
+      double b_next = b[i + 1];
+      double b_cur = b_next - e[i] * d[i];
+      a[i] = prev_b + c[i] * d[i];
+      b[i] = b_cur;
+      prev_b = b_cur;
+    }
+    dummy(a, b, c, d, e, aa, bb, cc, 0.);
+  }
+  return 0;
+}
+/* ====END_OPT_AUTOGEN==== */

@@ -27,6 +27,26 @@ why the inner loop is rejected by the vectorizer (dependency type, induction var
 reduction order, aliasing, etc.). Then choose ONE concrete, minimal transformation strategy that
 would let a later code-generation step produce a vectorizable `{{kernel}}_opt()`.
 
+Also decide which code-generation ROUTE is most likely to succeed, and order the fallbacks:
+
+- `rewrite`   : rewrite the loop in equivalent plain C so clang auto-vectorizes it.
+                Default; best when a dependence/IV/control-flow structure can be rewritten away.
+- `pragma`    : keep the loop structure and add an explicit directive instead of changing semantics:
+                `#pragma clang loop vectorize(enable)`, `interleave(4)`,
+                `#pragma clang loop distribute(enable)` (the vectorizer explicitly recommends this
+                when it reports "unsafe dependent memory operations ... Use #pragma clang loop
+                distribute(enable)"), or `#pragma omp simd reduction(...)` for FP reductions.
+                Choose this when the remark names a specific pragma, or when the structure is fine
+                but the cost-model / FP-reassociation blocks auto-vectorization.
+- `intrinsic` : write the SIMD loop by hand with `<immintrin.h>` (AVX2). Only when plain-C rewrites
+                AND pragmas cannot work, e.g. reductions the vectorizer will never touch, or a loop
+                whose cost model keeps rejecting it.
+- `hybrid`    : combination — rewrite the main body and hand-vectorize only the critical loop(s).
+
+Output `recommended_routes` as an ordered array (first = try first). Usually start with `rewrite`;
+only put another route first when you are confident rewrite cannot express it (e.g. FP reduction
+needs `pragma`/`intrinsic`, or a `distribute`-style control-flow obstacle is present).
+
 ## Rules the strategy MUST obey
 - The opt loop must have the SAME trip counts and SAME number of NTIMES repetitions as orig
   (only the inner-loop body / local data layout may change). No algorithmic trip-count reduction.
@@ -47,6 +67,7 @@ would let a later code-generation step produce a vectorizable `{{kernel}}_opt()`
   "obstacle": "<precise statement of what blocks vectorization, citing the exact statements/indices>",
   "obstacle_kind": "true-dep|anti-dep|control-flow|induction|reduction|aliasing|other",
   "strategy": "<one-sentence name of the chosen transform>",
+  "recommended_routes": ["rewrite", "pragma", "intrinsic"],
   "transform_plan": ["<step 1>", "<step 2>", "... several concrete steps the code generator must follow>"],
   "risk_notes": "<edge cases: boundaries, buffers, exactness, remainder handling>",
   "performance_notes": "<memory-traffic estimate: will the plan add whole-array passes? If the loop is memory-bound, the transform MUST avoid multi-pass rewrites and instead remove the dependence by substitution so all reads are old values in a single loop>"

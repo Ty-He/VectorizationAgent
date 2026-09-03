@@ -176,7 +176,7 @@ node src/cli.js s341 --force               # 已出结果时强制重跑
 node src/cli.js all                        # 依次优化全部 10 内核
 ```
 参数：`--tries N` `--threshold X` `--bench N` `--force` `--retain-nogain`
-`--no-reflect` `--quiet`。
+`--routes rewrite,pragma,intrinsic` `--no-reflect` `--quiet`。
 
 退出码：成功/`ok-nogain`=0；失败(达标未满足/出错)=1；参数错=2。
 

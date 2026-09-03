@@ -23,22 +23,23 @@
 - **LLM 配置**：默认 `deepseek-chat`（非推理、快、省 token）；若改用推理型
   `deepseek-v4-flash` 需 `LLM_MAX_TOKENS>=32768`，见 AGENT_SYSTEM.md。
 
-### 实验进度（10 内核）
+### 实验进度（10 内核，截至一次全量无人值守跑 + 针对性复跑）
 
 | 内核 | 类别 | 状态 | 备注 |
 |------|------|------|------|
-| s453 | InductionVariable | ✅ ok | speedup ≈ 5.4–5.7x（agent 首轮命中） |
-| s212 | StatementReordering | ✅ ok | speedup > 2x（用户实测） |
-| s241 | NodeSplitting | ✅ ok | speedup > 2x（用户实测） |
-| s1161 | ControlFlow | 🟡 ok-nogain | 正确+向量化 VF4，无加速（0.36x 留存） |
-| s211 | StatementReordering | ❌ 待定 | 可正确+向量化(≈0.95x)，可用 `--retain-nogain` 留存 |
-| s292 | LoopRestructuring | ⏳ 待跑 | 预计高收益 |
-| s341 | Packing | ⏳ 待跑 | 结构性强（前缀和/散射） |
-| s421 | Equivalencing | ⏳ 待跑 | 指针别名 |
-| s482 | ControlFlow | ⏳ 待跑 | break 提前退出 |
-| vdotr | ControlLoops | ⏳ 待跑 | FP 归约，需容差/手写 SIMD |
+| s453 | InductionVariable | ✅ ok | speedup 5.47x（rewrite，1 attempt） |
+| vdotr | ControlLoops | ✅ ok | speedup 7.38x（rewrite 重排归约） |
+| s212 | StatementReordering | ✅ ok | speedup 2.38x |
+| s241 | NodeSplitting | ✅ ok | speedup 2.15x |
+| s211 | StatementReordering | ✅ ok | speedup 1.74x |
+| s292 | LoopRestructuring | ✅ ok | speedup 1.54x |
+| s482 | ControlFlow | ✅ ok | speedup 1.54x |
+| s1161 | ControlFlow | 🟡 ok-nogain | 三路线全试，最佳 no-gain 0.85x（pragma 两遍拆分） |
+| s341 | Packing | 🟡 ok-nogain | 三路线全试，最佳 no-gain 0.78x（intrinsic） |
+| s421 | Equivalencing | ⚠️ 不稳定 | 确有收益：已有实现 ~1.45x（`kernels/s421.c`）；自动复现不稳定 |
 
 > 实测数据会随运行更新到 `experiments/results.csv`（git 忽略，不入库）。
+> 详细方法学与逐内核说明见 [EXPERIMENTS.md](EXPERIMENTS.md)。
 
 ## 2. 当前方案的边界（为何需要"候选多样性"）
 
@@ -104,6 +105,62 @@ LLM 分析。它擅长：
   至少达到多数（预计 s453/s212/s241/s292 + 若干）；
 - `experiments/results.csv` 给出前后性能对比供报告/PPT。
 
+> 状态：✅ 已达成 —— 一次全量无人值守跑 7/10 `ok`（s453/vdotr >5x，s212/s241/s211 >2x，
+> s292/s482 ~1.5x）；s1161/s341 三路线全试后以 no-gain 留存；s421 已有 1.45x 实现但自动复现不稳定。
+> 详见 [EXPERIMENTS.md](EXPERIMENTS.md)。
+
+### 3.5 落地路线（不破坏现状的增量实现）
+
+> 实现状态：**B0 ✅、B1 ✅ 已实现**（路线预算分配见下），**B3 ✅ 已做回归**（smoke +
+> s453 复跑不回退）；**B2（跨 route 择优）暂缓**，当前为"no-gain 模式下保留各路线最优候选"。
+
+前提：rewrite 已能解决约一半内核，因此候选多样性**不作为对现有管线的重构**，而是
+"保留 rewrite 为默认首选项、失败/不适配时才向上切换"的增量扩展。设计上保持三个不变：
+
+- 每轮仍然生成**一个候选**（不在单轮内做多候选大爆炸，避免 token 与调试成本激增）；
+- **四道闸门（编译/正确/向量化/基准）对所有 route 完全一致**，不因 route 放松判定；
+- 现有模块只增不改：driver 的 attempt 循环结构保留，route 只影响"生成用哪个模板/指令"。
+
+分四个可独立交付的小步：
+
+- **B0 前置（低风险小改，先行）**
+  1. `generate` 提示词加 `route` 占位（默认 `rewrite`，行为与现在逐字节一致）；
+  2. `remarks.js` 预埋 intrinsic 判定能力：从 `InstructionMix`/反汇编统计 SIMD 指令
+     （`%xmm/ymm/zmm`、mov*ps/pd 等），为 intrinsic 路线和"已向量化但无 Passed 记录"
+     的内核作证据，先实现不启用。
+
+- **B1 路线升级（最小可用）**
+  3. `analyze` 输出增加 `recommended_routes`（有序数组，如 `["rewrite"]` 或
+     `["rewrite","pragma","intrinsic"]`，按 obstacle_kind + remark 提示推断）；
+  4. driver 按**确定性预算**分配路线：第一条（首选，通常 rewrite）获得除去"兜底预算"后的
+     全部尝试；每个后续兜底路线（pragma/intrinsic）默认各 1 次（env
+     `VECTORIZER_ROUTE_SWITCH_TRIES` 可调）。例：tries=6、routes=rewrite,pragma,intrinsic →
+     rewrite×4 + pragma×1 + intrinsic×1，避免 rewrite（实证对约半数内核有效）被饿死；
+     同一 route 内仍使用现有去重 + reflect 机制；
+  5. 新增模板：`prompts/generate.md`（= rewrite 默认）、`generate_pragma.md`、
+     `generate_intrinsic.md`；pragma 模板给出常用指令清单
+     （`#pragma clang loop vectorize(enable)/interleave(4)`、`distribute(enable)`、
+     `#pragma omp simd reduction(...)`、`#pragma clang loop vectorize_width(4)`）；
+     intrinsic 模板要求产出完整可编译的 `immintrin.h` 版本并遵守容量/容差约定；
+  6. 各 route 候选存 `experiments/<kernel>/candidates/<route>_<n>.c`；kernels 文件仍只放
+     最终被采纳的那份。
+
+- **B2 择优（仅在 B1 效果不够时启用）**
+  7. 对"某 route 已 correct+vectorized 但 speedup 不达标"的情况，允许下一条 route 再试，
+     两者都达标时保留最快者；仍一次只生成一个候选，只是"预算内可跨 route 择优"。
+
+- **B3 回归与测量**
+  8. `npm run smoke` 与 s453/s212/s241 复跑，确认原有内核结果/数值不回退；
+  9. 逐内核记录 route 命中情况到 result.json（字段 `route_used`、`route_history`）。
+
+route 使能信号（初版建议）：
+| 信号 | 建议 route |
+|------|-----------|
+| 默认（依赖/IV/控制流可改写） | rewrite |
+| remark 建议 distribute / cost-model 拒绝 / 需要允许 FP 重结合（归约类） | pragma |
+| 自动向量化稳定拒绝但确有 SIMD 收益 / vdotr / rewrite+pragma 都失败 | intrinsic |
+| 复杂组合（s341 前缀计数、s421 别名、s482 break） | hybrid = rewrite 主 + 关键循环 intrinsics/pragma |
+
 ## 4. 远期/其他事项
 
 - **难内核专项**：s211/s1161 归入 no-gain 展示；s341/s421/s482/vdotr 结合候选多样性
@@ -113,3 +170,17 @@ LLM 分析。它擅长：
 - **可移植性**：`-march=native` 产物仅限本机，换机器需重编译（报告注明 CPU 型号）。
 - **交付物**：完整源码（本仓库）+ 性能对比数据（results.csv 导出）+ 设计报告 +
   PPT；README 提交物清单随进度勾选。
+
+## 5. 设计决定备忘
+
+- **LLM 输出健壮性**：偶发"unbalanced JSON braces"是模型在 `max_tokens` 内被截断
+  （`finish_reason=length`）产生的半截 JSON，非逻辑错误；重试常能成功是模型的非确定性。
+  `src/llm/client.js` 已把 `finish_reason==="length"`（无论 content 是否为空）视为不完整，
+  追加"补齐答案、勿长考"后重试最多 3 次；`schemas.extractJson` 用平衡括号扫描并在失败时
+  给出首 200 字符便于定位。必要时可进一步把 `LLM_MAX_TOKENS` 调大。
+- **是否给 LLM 工具调用（tool calls）能力**：暂不引入。理由：本架构中"验证/获取信息"
+  已由 driver 用确定性工具完成，且每次生成后都强制跑四道闸门，模型**无需自证正确性**；
+  引入工具调用会引入多轮状态、更多失败面与更高成本，收益有限。只有当未来演进为
+  "模型自主决定验证节奏/顺序的通用 agent" 时才值得引入。若遇到"模型缺少某些现场信息"
+  的个案，优先以**确定性方式把更丰富上下文喂进 prompt**（如对应循环的反汇编、
+  更多 remark）来解决，而不是让模型自己去翻文件。

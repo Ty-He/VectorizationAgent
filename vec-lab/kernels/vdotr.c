@@ -20,3 +20,21 @@ int vdotr_orig(void)
   }
   return 0;
 }
+
+
+/* ====BEGIN_OPT_AUTOGEN (vectorizer agent)==== */
+int vdotr_opt(void)
+{
+  for (int nl = 0; nl < 10 * NTIMES; nl++) {
+    TYPE dot = 0.;
+    #pragma clang loop vectorize(enable)
+    #pragma clang loop vectorize_width(4)
+    for (int i = 0; i < LEN; i++) {
+      dot += a[i] * b[i];
+    }
+    lab_result = dot;
+    dummy(a, b, c, d, e, aa, bb, cc, 0.);
+  }
+  return 0;
+}
+/* ====END_OPT_AUTOGEN==== */
