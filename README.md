@@ -12,6 +12,7 @@
 
 | 文档 | 内容 |
 |------|------|
+| [docs/DESIGN_REPORT.md](docs/DESIGN_REPORT.md) | 设计报告（系统架构 + 实验分析） |
 | [docs/AGENT_SYSTEM.md](docs/AGENT_SYSTEM.md) | 模块功能、单次任务的执行流程、命令速查 |
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | 10 内核实验结果汇总、方法学、no-gain 专项说明 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 项目现状总结与"候选多样性"开发规划 |
@@ -70,5 +71,5 @@ node src/cli.js all         # 依次优化全部内核
 
 - [x] 完整源代码
 - [x] 10 个函数的向量化前后性能对比数据（`experiments/results.csv`，方法学见 docs/EXPERIMENTS.md）
-- [ ] 项目展示 PPT
-- [ ] 设计报告（含系统架构、实验分析）
+- [x] 项目展示 PPT
+- [x] 设计报告（含系统架构、实验分析，见 [docs/DESIGN_REPORT.md](docs/DESIGN_REPORT.md)）

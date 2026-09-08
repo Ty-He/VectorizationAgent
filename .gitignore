@@ -19,3 +19,6 @@ node_modules/
 
 # pre-run backups
 /backups/
+
+# ir
+vec-lab/kernels/out_ir
